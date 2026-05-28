@@ -4,8 +4,8 @@ Artigos/
 # ── Data (raw and processed) ───────────────────────────────────────────────────
 data/
 
-# ── Model checkpoints ──────────────────────────────────────────────────────────
-models/
+# ── Model checkpoints (root-level only, not src/models/) ──────────────────────
+/models/
 *.pt
 *.pth
 *.ckpt
