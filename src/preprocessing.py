@@ -463,3 +463,99 @@ def build_pearson_graph(
         graphs.append(Data(x=x_tensor, edge_index=edge_index, edge_attr=edge_attr))
 
     return graphs
+
+
+def build_knn_channel_graph(
+    windows: np.ndarray,
+    k: int = 4,
+    symmetrize: bool = True,
+) -> List[Data]:
+    """Build one k-NN graph per window over CHANNELS (mirror of build_pearson_graph).
+
+    This is the controlled counterpart of :func:`build_pearson_graph`. The node
+    set, the node features and the value of ``k`` are *identical* to that
+    function — each window becomes a graph with C channel-nodes, each carrying
+    the same 6 per-channel statistics (RMS, kurtosis, crest_factor,
+    peak_to_peak, skewness, zero_crossing_rate). The **only** difference is the
+    edge-construction criterion: here an edge (i, j) is created when channel j
+    is among the k nearest neighbours of channel i in *Euclidean distance* over
+    the per-channel statistical feature space, instead of by Pearson
+    correlation. This isolates the edge metric as the single experimental
+    variable in the graph-construction ablation.
+
+    Note on why this does not collapse onto the Pearson graph: for z-normalised
+    signals, squared Euclidean distance is a monotone function of correlation
+    (``||x_i - x_j||^2 = 2(1 - corr)``), which would make k-NN and Pearson
+    produce identical neighbourhoods. Computing the distance in the *statistical
+    feature space* (not on the raw signal) avoids that collapse — proximity of
+    summary statistics and temporal co-movement are genuinely different
+    relations.
+
+    Parameters
+    ----------
+    windows : np.ndarray
+        Shape (n_windows, C, W).
+    k : int
+        Number of nearest channels kept per node (default 4).
+    symmetrize : bool
+        If True, ensure (i,j) implies (j,i). Default True.
+
+    Returns
+    -------
+    List[torch_geometric.data.Data]
+        One Data object per window with:
+          - x          : (C, 6)  — per-channel statistical features (same as Pearson)
+          - edge_index : (2, E)  — directed edges (E ≤ C * k)
+          - edge_attr  : (E, 1)  — Euclidean distance weights
+    """
+    if windows.ndim != 3:
+        raise ValueError(f"Expected windows with shape (N, C, W), got {windows.shape}")
+
+    n_windows, n_ch, _ = windows.shape
+    k_actual = min(k, n_ch - 1)
+    if k_actual <= 0:
+        raise ValueError(f"k must be in [1, C-1], got k={k} and C={n_ch}")
+
+    graphs: List[Data] = []
+    for i in range(n_windows):
+        w = windows[i]  # (C, W)
+
+        node_feats = np.zeros((n_ch, _N_FEATURES_PER_CHANNEL), dtype=np.float32)
+        for ch in range(n_ch):
+            node_feats[ch] = _channel_features(w[ch])
+
+        # Pairwise Euclidean distance between channel feature vectors: dist[i,j] = ||f_i - f_j||
+        diff = node_feats[:, None, :] - node_feats[None, :, :]  # (C, C, 6)
+        dist = np.sqrt((diff ** 2).sum(axis=2)).astype(np.float32)  # (C, C)
+        np.fill_diagonal(dist, np.inf)  # exclude self from nearest-neighbour search
+
+        # k nearest per row (smallest distances)
+        knn_idx = np.argpartition(dist, k_actual - 1, axis=1)[:, :k_actual]
+
+        src_list: List[int] = []
+        dst_list: List[int] = []
+        weight_list: List[float] = []
+        seen = set()
+        for src_node in range(n_ch):
+            for dst_node in knn_idx[src_node]:
+                dst_int = int(dst_node)
+                if dst_int == src_node:
+                    continue
+                pairs = [(src_node, dst_int)]
+                if symmetrize:
+                    pairs.append((dst_int, src_node))
+                for a, b in pairs:
+                    if (a, b) in seen:
+                        continue
+                    seen.add((a, b))
+                    src_list.append(a)
+                    dst_list.append(b)
+                    weight_list.append(float(dist[a, b]))
+
+        edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+        edge_attr = torch.tensor(weight_list, dtype=torch.float32).unsqueeze(1)
+        x_tensor = torch.from_numpy(node_feats)
+
+        graphs.append(Data(x=x_tensor, edge_index=edge_index, edge_attr=edge_attr))
+
+    return graphs
