@@ -4,14 +4,16 @@ Experiment comparing two graph construction strategies for vibration-based fault
 
 ## Research question
 
-Does the choice of graph topology (k-NN in statistical feature space vs. Pearson correlation between sensor channels) significantly affect GAT fault classification performance?
+Holding everything else constant (nodes, node features, k, architecture, seeds, split), does the **edge-construction criterion** alone — Euclidean k-NN vs. Pearson correlation between sensor channels — significantly affect GAT fault classification performance?
 
 ## Graph construction strategies
 
-| Strategy | Nodes | Edges | Motivation |
+Both strategies build a per-window graph over the **same 9 sensor channels** (nodes), each carrying the **same 6 per-channel statistics** (RMS, kurtosis, crest factor, peak-to-peak, skewness, zero-crossing rate), with the **same k=4**. The *only* difference is how edges are drawn. This isolates the edge metric as the single experimental variable; a Jaccard edge-overlap check (~0.49) confirms the two graph sets are genuinely distinct.
+
+| Strategy | Nodes | Edges | Relation captured |
 |---|---|---|---|
-| k-NN (baseline) | time windows | Euclidean k-NN (k=8) in 54-d statistical feature space | Windows with similar statistical profiles share the same operating condition |
-| Pearson Top-k | sensor channels | Top-4 absolute Pearson correlations per channel (symmetrized) | Mechanical faults propagate vibration through structural paths, creating physically interpretable inter-sensor couplings |
+| k-NN (Euclidean) | 9 sensor channels | each channel → its 4 nearest channels in Euclidean distance over the statistical feature space (symmetrized) | channels with similar statistical profiles |
+| Pearson Top-k | 9 sensor channels | each channel → its 4 channels of highest absolute Pearson correlation within the window (symmetrized) | channels that co-vary in time |
 
 ## Statistical design
 
@@ -19,12 +21,23 @@ Does the choice of graph topology (k-NN in statistical feature space vs. Pearson
 - **95% bootstrap confidence intervals** (2000 resamples, percentile method)
 - **Mann-Whitney U test** (two-sided, α=0.05) — non-parametric, no normality assumption
 
+## Result
+
+With the edge metric isolated as the only variable, the two constructions are **statistically equivalent**: no significant difference in F1 (U=251, p=0.172) or AUC (U=246, p=0.218).
+
+| Strategy | F1 macro (95% CI) | AUC (95% CI) |
+|---|---|---|
+| k-NN (Euclidean) | 0.9289 [0.9071, 0.9525] | 0.9902 [0.9865, 0.9938] |
+| Pearson Top-k | 0.9091 [0.8822, 0.9358] | 0.9852 [0.9794, 0.9909] |
+
+The choice of channel-connection criterion is not decisive for GAT fault diagnosis on EGB-250; both relations capture comparable discriminative information.
+
 ## Repository structure
 
 ```
 src/
   models/gat.py          — VibrationGAT architecture
-  preprocessing.py       — build_knn_graph + build_pearson_graph
+  preprocessing.py       — build_knn_channel_graph + build_pearson_graph
   data_loader.py         — EGB-250 .mat loader
 notebooks/
   pearson_graph_experiment.ipynb  — main experiment (Colab-ready)
